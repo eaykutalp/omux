@@ -52,6 +52,7 @@ final class Store: ObservableObject {
 
     private var terminals: [UUID: TermView] = [:]
     private var codexStarts: [UUID: Task<Void, Never>] = [:]
+    private var codexStopping: Set<UUID> = []
     private var antigravityIDTasks: [UUID: Task<Void, Never>] = [:]
     /// Sessions whose startup command is about to be typed; Start would type it a second time.
     private var pendingCommands: [UUID: UUID] = [:]
@@ -366,16 +367,32 @@ final class Store: ObservableObject {
     /// asks for a second Ctrl-C to exit. The shell itself stays at its prompt.
     func stop(_ id: UUID) {
         if runtime[id]?.provider == .codex {
-            guard terminals[id] != nil, !(runtime[id]?.exited ?? true) else { return }
+            guard let view = terminals[id], !(runtime[id]?.exited ?? true),
+                  codexStarts[id] == nil, codexStopping.insert(id).inserted else { return }
             Task {
+                defer { self.codexStopping.remove(id) }
                 do {
                     try await CodexManager.shared.interrupt(id)
-                    // Once the server confirms interruption, exit its remote TUI
-                    // before closing the endpoint so it cannot sit in reconnect loop.
-                    if let view = self.terminals[id] { view.send(txt: "\u{03}") }
-                    try await Task.sleep(for: .milliseconds(400))
-                    self.closeCodex(id)
-                    self.update(id) { $0.busy = false; $0.agentConnected = false; $0.statusState = nil }
+                    guard self.terminals[id] === view else { return }
+                    view.send(txt: "\u{03}")
+                    // Wait for the remote client to exit before removing its endpoint.
+                    for _ in 0..<30 {
+                        if !Self.hasChildProcess(of: view.process.shellPid) { break }
+                        try await Task.sleep(for: .milliseconds(100))
+                        guard self.terminals[id] === view else { return }
+                    }
+                    guard !Self.hasChildProcess(of: view.process.shellPid) else {
+                        throw CodexError.server("The task stopped, but the Codex terminal has not exited. Its server was left open.")
+                    }
+                    try await CodexManager.shared.closeAndWait(id)
+                    guard self.terminals[id] === view else { return }
+                    self.update(id) {
+                        $0.busy = false
+                        $0.agentConnected = false
+                        $0.statusState = nil
+                        $0.statusDetail = nil
+                        $0.statusKind = nil
+                    }
                 } catch {
                     Self.showError("Couldn't stop Codex", error.localizedDescription)
                 }
@@ -490,7 +507,7 @@ final class Store: ObservableObject {
 
     /// Starts the selected provider in an idle shell or resumes its exact saved chat.
     func start(_ id: UUID) {
-        guard let loc = location(of: id), pendingCommands[id] == nil else { return }
+        guard let loc = location(of: id), pendingCommands[id] == nil, !codexStopping.contains(id) else { return }
         let tab = groups[loc.group].tabs[loc.tab]
         // The Codex App Server token is injected into the shell when its terminal is
         // created. After Stop closes that server, Play must create a fresh shell too;

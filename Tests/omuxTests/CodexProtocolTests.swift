@@ -166,4 +166,21 @@ final class CodexProtocolTests: XCTestCase {
         XCTAssertNil(manager.approval(for: tab))
     }
 
+    @MainActor
+    func testThreadStatusIdleClearsActiveTurn() {
+        let manager = CodexManager(), tab = UUID()
+        manager.register(tabID: tab, threadID: "root")
+        manager.receive(["method": "turn/started", "params": ["threadId": "root", "turn": ["id": "turn-1"]]], owner: tab)
+        manager.receive(["method": "thread/status/changed", "params": ["threadId": "root", "status": ["type": "idle"]]], owner: tab)
+    }
+
+    @MainActor
+    func testTurnCompletedWithoutPriorStartedClearsActivity() {
+        let manager = CodexManager(), tab = UUID()
+        manager.register(tabID: tab, threadID: "root")
+        var status: CodexStatus?
+        manager.onStatus = { _, s in status = s }
+        manager.receive(["method": "turn/completed", "params": ["threadId": "root", "turn": ["id": "unexpected-turn", "status": "completed"]]], owner: tab)
+        XCTAssertEqual(status?.state, .done)
+    }
 }

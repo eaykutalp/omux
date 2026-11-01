@@ -146,32 +146,62 @@ final class CodexManager: ObservableObject {
         guard let root = threads[tabID] else { return }
         let threadIDs = (agents[tabID] ?? []).map(\.id) + [root]
         for thread in threadIDs {
-            var turn = turns[thread]
+            let connection = connection(for: tabID)
+            // An idle CLI has no active turn to interrupt. Read live server state
+            // instead of treating a missing ID (or stored history) as proof of activity.
+            let snapshot = try await connection.request("thread/read", params: ["threadId": thread])
+            guard let record = snapshot["thread"] as? [String: Any],
+                  let rawStatus = record["status"] as? [String: Any],
+                  let serverStatus = CodexStatus.decode(rawStatus) else {
+                throw CodexError.server("Couldn't read the current Codex task state. The session was left open.")
+            }
+            if serverStatus.state == .idle {
+                turns[thread] = nil
+                approvals[thread] = nil
+                publish(thread, serverStatus)
+                continue
+            }
+            var turn = turns[thread] ?? approvals[thread]?.first?.turnID
             // A remote TUI may have started its turn before our notification arrived.
             // Read the dedicated paginated turn API so Stop can target that exact turn;
             // paginated threads do not reliably include turns in thread/resume.
             if turn == nil {
-                let response = try await connection(for: tabID).request("thread/turns/list", params: [
+                let response = try await connection.request("thread/turns/list", params: [
                     "threadId": thread, "limit": 10, "sortDirection": "desc", "itemsView": "notLoaded"
                 ])
                 if let history = response["data"] as? [[String: Any]],
-                   let active = history.first(where: { $0["status"] as? String == "inProgress" }),
-                   let id = active["id"] as? String {
+                let active = history.first(where: { $0["status"] as? String == "inProgress" }),
+                let id = active["id"] as? String {
                     turns[thread] = id
                     turn = id
                 }
             }
-            guard let turn else {
-                throw CodexError.server("Couldn't confirm Codex stopped: its active turn ID is unavailable. Keep the server open and use `codex --remote … agents`, select this task, and press x.")
+            guard let turnToInterrupt = turn else {
+                throw CodexError.server("Codex reports an active task but its turn ID is unavailable. The session was left open.")
             }
-            _ = try await connection(for: tabID).request("turn/interrupt", params: ["threadId": thread, "turnId": turn])
-            // The response acknowledges cancellation; turn/completed confirms it.
-            for _ in 0..<100 {
-                if turns[thread] != turn { break }
-                try await Task.sleep(for: .milliseconds(100))
+            do {
+                _ = try await connection.request("turn/interrupt", params: ["threadId": thread, "turnId": turnToInterrupt])
+                // The response acknowledges cancellation; turn/completed confirms it.
+                for _ in 0..<50 {
+                    if turns[thread] != turnToInterrupt { break }
+                    try await Task.sleep(for: .milliseconds(100))
+                }
+            } catch let error as CodexError {
+                if case .server(let msg) = error, msg.contains("no active turn") {
+                    // Turn already completed or was already cancelled
+                } else {
+                    throw error
+                }
             }
-            guard turns[thread] != turn else { throw CodexError.timeout }
+            let result = try await connection.request("thread/read", params: ["threadId": thread])
+            guard let record = result["thread"] as? [String: Any],
+                  let rawStatus = record["status"] as? [String: Any],
+                  CodexStatus.decode(rawStatus)?.state == .idle else {
+                throw CodexError.server("Codex has not confirmed that the task is idle. The session was left open.")
+            }
+            turns[thread] = nil
         }
+        publish(root, CodexStatus(state: .idle))
     }
 
     /// Stop a turn before removing its subscriber or deleting its worktree.
@@ -190,6 +220,11 @@ final class CodexManager: ObservableObject {
         connections.values.forEach { $0.close() }
         connections = [:]
         catalog.close()
+    }
+
+    func closeAndWait(_ tabID: UUID) async throws {
+        close(tabID)
+        if let shutdown = retiring[tabID] { try await shutdown.value }
     }
 
     func close(_ tabID: UUID) {
@@ -365,6 +400,7 @@ final class CodexManager: ObservableObject {
             }
         case "thread/status/changed":
             guard let thread, let raw = params["status"] as? [String: Any], let value = CodexStatus.decode(raw) else { return }
+            if value.state == .idle { turns[thread] = nil }
             if value.state == .idle, status[thread]?.state == .done || status[thread]?.state == .error { return }
             publish(thread, value)
             if agentOwners[thread] == owner {
@@ -377,9 +413,10 @@ final class CodexManager: ObservableObject {
             publish(thread, CodexStatus(state: .working))
         case "turn/completed":
             guard let thread, let turn = params["turn"] as? [String: Any] else { return }
-            guard turn["id"] as? String == turns[thread] else { return }
+            let completedID = turn["id"] as? String
+            if let active = turns[thread], let completedID, active != completedID { return }
             turns[thread] = nil; approvals[thread] = nil
-            completedTurns[thread] = turn["id"] as? String
+            completedTurns[thread] = completedID
             let failed = turn["status"] as? String == "failed"
             let error = turn["error"] as? [String: Any]
             publish(thread, CodexStatus(state: failed ? .error : .done, detail: error?["message"] as? String))
