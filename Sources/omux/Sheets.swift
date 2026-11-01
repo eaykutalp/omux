@@ -79,7 +79,7 @@ struct TabEditSheet: View {
     let tabID: UUID
 
     private enum CommandMode: String, CaseIterable, Identifiable {
-        case inherit = "Project default", claude = "Claude Code", codex = "Codex", shell = "Plain shell", custom = "Custom"
+        case inherit = "Project default", claude = "Claude Code", codex = "Codex", gemini = "Gemini CLI", shell = "Plain shell", custom = "Custom"
         var id: String { rawValue }
     }
 
@@ -97,6 +97,7 @@ struct TabEditSheet: View {
         case .inherit: return store.group(containing: tabID)?.provider ?? .shell
         case .claude: return .claude
         case .codex: return .codex
+        case .gemini: return .gemini
         case .shell: return .shell
         case .custom: return .custom
         }
@@ -155,6 +156,7 @@ struct TabEditSheet: View {
                 if let command = tab.command, command != "claude" { mode = .custom; customCommand = command }
                 else { mode = .claude }
             case .codex: mode = .codex
+            case .gemini: mode = .gemini
             case .shell: mode = .shell
             case .custom: mode = .custom; customCommand = tab.command ?? ""
             case nil:
@@ -162,6 +164,7 @@ struct TabEditSheet: View {
                 case nil: mode = .inherit
                 case "": mode = .shell
                 case "codex": mode = .codex
+                case "gemini": mode = .gemini
                 case "claude": mode = .claude
                 case let cmd?: mode = .custom; customCommand = cmd
                 }
@@ -180,6 +183,7 @@ struct TabEditSheet: View {
             case .inherit: tab.command = nil; tab.provider = nil
             case .claude: tab.command = "claude"; tab.provider = .claude
             case .codex: tab.command = "codex"; tab.provider = .codex
+            case .gemini: tab.command = "gemini"; tab.provider = .gemini
             case .shell: tab.command = ""; tab.provider = .shell
             case .custom: tab.command = customCommand; tab.provider = SessionProvider.infer(command: customCommand)
             }
@@ -315,6 +319,7 @@ struct RecentSessionsSheet: View {
             Picker("Agent", selection: $provider) {
                 Text("Claude Code").tag(SessionProvider.claude)
                 Text("Codex").tag(SessionProvider.codex)
+                Text("Gemini CLI").tag(SessionProvider.gemini)
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, 12)

@@ -21,6 +21,7 @@ struct WelcomeSheet: View {
     @ObservedObject private var codex = CodexManager.shared
     @State private var claudePath: String??
     @State private var codexPath: String??
+    @State private var geminiPath: String??
     @State private var notifications: UNAuthorizationStatus?
     @State private var checkedUsage = false
 
@@ -28,7 +29,7 @@ struct WelcomeSheet: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Welcome to omux").font(.title2.bold())
-                Text("A terminal for running many Claude Code and Codex sessions side by side. A few checks before you start.")
+            Text("A terminal for running many Claude Code, Codex, and Gemini CLI sessions side by side. A few checks before you start.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -56,8 +57,10 @@ struct WelcomeSheet: View {
             UserDefaults.standard.set(true, forKey: Prefs.welcomed)
             async let claude = Tools.path(of: "claude")
             async let codex = Tools.path(of: "codex")
+            async let gemini = Tools.path(of: "gemini")
             claudePath = .some(await claude)
             codexPath = .some(await codex)
+            geminiPath = .some(await gemini)
             notifications = await Notifier.shared.authorizationStatus()
         }
     }
@@ -77,6 +80,8 @@ struct WelcomeSheet: View {
                     missing: "Not found. Install it with `npm install -g @anthropic-ai/claude-code`, or see claude.com/claude-code. Plain shell sessions work without it.")
             toolRow("Codex", command: "codex", path: codexPath,
                     missing: "Not found. Optional: `npm install -g @openai/codex` to run Codex sessions too.")
+            toolRow("Gemini CLI", command: "gemini", path: geminiPath,
+                    missing: "Not found. Optional: `npm install -g @google/gemini-cli` to run Gemini sessions too.")
         }
     }
 

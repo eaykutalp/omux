@@ -106,7 +106,7 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Toggle("Confirm before quitting while sessions are running", isOn: $confirmQuit)
-                Text("Quitting stops every session. Saved Claude Code and Codex conversations can be continued on the next launch.")
+                Text("Quitting stops every session. Claude Code and Codex conversations can be continued on the next launch; Gemini CLI manages its own saved sessions.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -351,6 +351,7 @@ struct AppCommands: Commands {
             Button("New Session") { store.newTab() }.keyboardShortcut("t")
             Button("New Codex Session") { store.newTab(command: "codex") }
             Button("New Claude Code Session") { store.newTab(command: "claude") }
+            Button("New Gemini Session") { store.newTab(command: "gemini") }
             Button("New Shell") { store.newTab(command: "") }.keyboardShortcut("t", modifiers: [.command, .shift])
             Button("New Session in Worktree…") {
                 if let id = store.selectedGroup?.id ?? store.groups.first?.id { store.newWorktreeGroupID = id }

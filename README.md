@@ -67,6 +67,7 @@ Beta builds, distribution builds and tests are in [docs/building.md](docs/buildi
 - A Mac with Apple Silicon running macOS 14 or later
 - [Claude Code](https://claude.com/claude-code) installed as `claude` for Claude sessions. Plain shell sessions work without it.
 - Codex CLI 0.165.0 or later installed as `codex` for Codex sessions
+- Gemini CLI installed as `gemini` for Gemini sessions (`npm install -g @google/gemini-cli`)
 - To build from source: Swift 6.2 or later (Xcode 26 or the Command Line Tools)
 
 ---

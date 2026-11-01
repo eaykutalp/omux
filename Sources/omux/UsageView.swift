@@ -9,9 +9,11 @@ struct UsageView: View {
     @State private var hovered: String?
     @AppStorage(Prefs.usageInterval) private var usageInterval = 300.0
 
-    /// Codex sessions show Codex's limits; every other session shows Claude's, as before.
+    /// Codex sessions show Codex's limits. Gemini CLI does not expose a supported
+    /// usage endpoint here, so it doesn't show Claude's limits by accident.
     private var isCodex: Bool { store.selectedProvider == .codex }
-    private var limits: [UsageMonitor.Limit] { isCodex ? codex.limits : monitor.limits }
+    private var isGemini: Bool { store.selectedProvider == .gemini }
+    private var limits: [UsageMonitor.Limit] { isCodex ? codex.limits : (isGemini ? [] : monitor.limits) }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -19,7 +21,15 @@ struct UsageView: View {
                 Text(codex.plan.map { "Codex \($0.replacingOccurrences(of: "_", with: " ").capitalized)" } ?? "Codex")
                     .font(.caption2).foregroundStyle(.tertiary)
             }
+            if isGemini {
+                Text("Gemini CLI")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
             if limits.isEmpty {
+                if isGemini {
+                    Text("Usage unavailable")
+                        .font(.caption2).foregroundStyle(.secondary)
+                } else {
                 Button {
                     if isCodex { Task { await codex.refreshUsage() } } else { monitor.refresh() }
                 } label: {
@@ -29,6 +39,7 @@ struct UsageView: View {
                 }
                 .buttonStyle(.plain)
                 .help(isCodex ? codex.usageError ?? "" : monitor.detail ?? "")
+                }
             }
             ForEach(limits) { limit in
                 VStack(alignment: .leading, spacing: 2) {

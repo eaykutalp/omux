@@ -77,6 +77,7 @@ struct Sidebar: View {
             Button("Open Folder as Project…") { store.openFolderPanel() }
             Button("Open Recent Conversation…") { store.showRecentSessions = true }
             Button("New Codex Session") { store.newTab(command: "codex") }
+            Button("New Gemini Session") { store.newTab(command: "gemini") }
             Divider()
             Button("New Session") { store.newTab() }
             Button("New Shell") { store.newTab(command: "") }

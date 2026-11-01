@@ -44,9 +44,15 @@ final class SessionProviderTests: XCTestCase {
     }
 
     func testCustomCommandsRemainCustom() {
-        for command in ["env codex", "codex exec task", "npm run dev", "/path/to/wrapper"] {
+        for command in ["env codex", "codex exec task", "env gemini", "npm run dev", "/path/to/wrapper"] {
             XCTAssertEqual(SessionProvider.infer(command: command), .custom)
         }
+    }
+
+    func testGeminiCommandsAreRecognized() {
+        XCTAssertEqual(SessionProvider.infer(command: "gemini"), .gemini)
+        XCTAssertEqual(SessionProvider.infer(command: "gemini --model gemini-2.5-pro"), .gemini)
+        XCTAssertEqual(SessionProvider.gemini.command, "gemini")
     }
 
     func testClaudeStartsANewPinnedConversationInsteadOfContinuingAnotherTab() {
@@ -65,7 +71,7 @@ final class SessionProviderTests: XCTestCase {
 
     func testAgentsDoNotStartOnTheirOwnInTheHomeFolder() {
         let home = "/Users/me"
-        for provider in [SessionProvider.claude, .codex] {
+        for provider in [SessionProvider.claude, .codex, .gemini] {
             XCTAssertFalse(provider.startsAutomatically(in: "/Users/me", home: home))
             XCTAssertFalse(provider.startsAutomatically(in: "/Users/me/", home: home))
             XCTAssertFalse(provider.startsAutomatically(in: "/Users/me/app/..", home: home))
