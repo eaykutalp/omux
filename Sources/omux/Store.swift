@@ -52,6 +52,7 @@ final class Store: ObservableObject {
 
     private var terminals: [UUID: TermView] = [:]
     private var codexStarts: [UUID: Task<Void, Never>] = [:]
+    private var antigravityIDTasks: [UUID: Task<Void, Never>] = [:]
     /// Sessions whose startup command is about to be typed; Start would type it a second time.
     private var pendingCommands: [UUID: UUID] = [:]
     /// A worktree setup command to run before a new Codex session's TUI starts.
@@ -59,10 +60,26 @@ final class Store: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
 
     private init() {
+        Self.configureAntigravityStatusLine()
         let saved = Persistence.loadWorkspace()
         var groups = saved?.groups ?? []
         if groups.isEmpty {
             groups = [TabGroup(name: "Default", tabs: [TabItem(name: "Session 1")])]
+        }
+        // A session keeps the provider and command it was created with. Project defaults
+        // apply only to newly created sessions; changing them must not turn an old tab into
+        // a different agent when Play/Continue is pressed.
+        for gi in groups.indices {
+            let group = groups[gi]
+            for ti in groups[gi].tabs.indices {
+                let inherited = groups[gi].tabs[ti].provider == nil
+                let provider = groups[gi].tabs[ti].resolvedProvider(in: group)
+                groups[gi].tabs[ti].provider = provider
+                if saved != nil, provider == .gemini { groups[gi].tabs[ti].antigravityStarted = true }
+                if groups[gi].tabs[ti].command == nil {
+                    groups[gi].tabs[ti].command = inherited ? group.command : provider.command
+                }
+            }
         }
         self.groups = groups
         let allIDs = Set(groups.flatMap { $0.tabs.map(\.id) })
@@ -212,6 +229,7 @@ final class Store: ObservableObject {
             "COLORTERM": "truecolor",
             "TERM_PROGRAM": "omux",
         ]
+        env["OMUX_TAB_ID"] = tab.id.uuidString
         if let enc = inherited["__CF_USER_TEXT_ENCODING"] { env["__CF_USER_TEXT_ENCODING"] = enc }
         if let codexHome = inherited["CODEX_HOME"] { env["CODEX_HOME"] = codexHome }
         let provider = tab.resolvedProvider(in: group)
@@ -232,6 +250,10 @@ final class Store: ObservableObject {
             $0.provider = provider; $0.agentConnected = false
             $0.exited = false; $0.cwd = dir; $0.title = ""
             $0.statusState = nil; $0.statusKind = nil; $0.statusDetail = nil; $0.statusChildren = []
+        }
+        if provider == .gemini { updateTab(tab.id) { $0.antigravityStarted = true } }
+        if provider == .gemini, tab.antigravityConversationID == nil {
+            watchForAntigravityConversation(tabID: tab.id)
         }
 
         // A tab without a project folder (or whose folder is gone) opens in the home folder;
@@ -283,6 +305,55 @@ final class Store: ObservableObject {
         CodexManager.shared.close(id)
     }
 
+    private func watchForAntigravityConversation(tabID: UUID) {
+        antigravityIDTasks[tabID]?.cancel()
+        antigravityIDTasks[tabID] = Task { [weak self] in
+            for _ in 0..<90 {
+                if Task.isCancelled { return }
+                try? await Task.sleep(for: .seconds(1))
+                guard let self, self.tab(tabID) != nil else { return }
+                if let id = Self.antigravityConversationID(for: tabID) {
+                    self.updateTab(tabID) { $0.antigravityConversationID = id }
+                    self.save()
+                    return
+                }
+            }
+        }
+    }
+
+    private static func antigravityConversationID(for tabID: UUID) -> String? {
+        let url = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Library/Application Support/omux/antigravity-conversations")
+            .appendingPathComponent(tabID.uuidString)
+        guard let data = try? Data(contentsOf: url),
+              let value = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else { return nil }
+        return value
+    }
+
+    /// Antigravity exposes the exact conversation ID through its documented statusline JSON.
+    /// Install a collector only when the user has not configured a custom statusline.
+    private static func configureAntigravityStatusLine() {
+        guard let script = Bundle.main.url(forResource: "antigravity-statusline", withExtension: "sh") else { return }
+        let settingsURL = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".gemini/antigravity-cli/settings.json")
+        try? FileManager.default.createDirectory(at: settingsURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        var settings: [String: Any] = [:]
+        if let data = try? Data(contentsOf: settingsURL),
+           let existing = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            settings = existing
+        }
+        if let status = settings["statusLine"] as? [String: Any], status["command"] != nil { return }
+        settings["statusLine"] = [
+            "type": "command",
+            "command": script.path,
+            "stack_with_default": true
+        ]
+        guard JSONSerialization.isValidJSONObject(settings),
+              let output = try? JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys]) else { return }
+        try? output.write(to: settingsURL, options: .atomic)
+    }
+
     /// Kills the shell and everything it spawned (claude, node, …), not just the shell.
     private func killTree(_ view: TermView) {
         let pid = view.process.shellPid
@@ -295,11 +366,9 @@ final class Store: ObservableObject {
     /// asks for a second Ctrl-C to exit. The shell itself stays at its prompt.
     func stop(_ id: UUID) {
         if runtime[id]?.provider == .codex {
-            if codexStarts[id] != nil { kill(id); return }
-            Task {
-                do { try await CodexManager.shared.interrupt(id) }
-                catch { Self.showError("Couldn't interrupt Codex", error.localizedDescription) }
-            }
+            // The remote TUI is the foreground process, while its App Server is a
+            // separate child owned by omux. Stopping this Codex session closes both.
+            kill(id)
             return
         }
         guard let view = terminals[id], !(runtime[id]?.exited ?? true) else { return }
@@ -453,6 +522,11 @@ final class Store: ObservableObject {
         let raw = (tab.command ?? group.command ?? "").trimmingCharacters(in: .whitespaces)
         if tab.resolvedProvider(in: group) == .shell { return nil }
         guard !raw.isEmpty else { return nil }
+        if tab.resolvedProvider(in: group) == .gemini {
+            let command = raw == "gemini" ? "agy" : raw
+            if let id = tab.antigravityConversationID, command == "agy" { return "agy --conversation \(id)" }
+            return tab.antigravityStarted && command == "agy" ? "agy -c" : command
+        }
         guard tab.resolvedProvider(in: group) == .claude else { return raw }
         let session = tab.claudeSessionID.uuidString.lowercased()
         return SessionProvider.claudeCommand(raw, sessionID: tab.claudeSessionID, conversationExists: Self.claudeSessionExists(session))
@@ -636,16 +710,18 @@ final class Store: ObservableObject {
     // MARK: Tabs
 
     func newTab(in groupID: UUID? = nil, command: String? = nil) {
+        let command = command ?? ""
         guard let gi = groups.firstIndex(where: { $0.id == (groupID ?? selectedGroup?.id) }) ?? groups.indices.first else {
             newGroup()
             return
         }
         if command != "", groups[gi].useWorktrees {
-            newWorktreeProvider = command.map { SessionProvider.infer(command: $0) }
+            newWorktreeProvider = SessionProvider.infer(command: command)
             newWorktreeGroupID = groups[gi].id
             return
         }
-        let tab = TabItem(name: "Session \(groups[gi].tabs.count + 1)", command: command)
+        var tab = TabItem(name: "Session \(groups[gi].tabs.count + 1)", command: command)
+        tab.provider = SessionProvider.infer(command: command)
         groups[gi].tabs.append(tab)
         groups[gi].isCollapsed = false
         makeTerminal(tab: tab, group: groups[gi])
@@ -684,6 +760,7 @@ final class Store: ObservableObject {
 
     func closeTab(_ id: UUID) {
         closeCodex(id)
+        antigravityIDTasks.removeValue(forKey: id)?.cancel()
         guard let loc = location(of: id) else { return }
         if let view = terminals.removeValue(forKey: id) {
             killTree(view)

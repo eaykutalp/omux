@@ -18,7 +18,7 @@ enum SessionProvider: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .claude: return "claude"
         case .codex: return "codex"
-        case .gemini: return "gemini"
+        case .gemini: return "agy"
         case .shell, .custom: return ""
         }
     }
@@ -38,7 +38,7 @@ enum SessionProvider: String, Codable, CaseIterable, Identifiable {
         let raw = (command ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if raw.isEmpty { return .shell }
         if raw == "codex" { return .codex }
-        if raw == "gemini" || raw.hasPrefix("gemini ") { return .gemini }
+        if raw == "agy" || raw.hasPrefix("agy ") || raw == "gemini" || raw.hasPrefix("gemini ") { return .gemini }
         if raw == "claude" || raw.hasPrefix("claude ") { return .claude }
         return .custom
     }

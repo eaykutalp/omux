@@ -57,7 +57,7 @@ struct WelcomeSheet: View {
             UserDefaults.standard.set(true, forKey: Prefs.welcomed)
             async let claude = Tools.path(of: "claude")
             async let codex = Tools.path(of: "codex")
-            async let gemini = Tools.path(of: "gemini")
+            async let gemini = Tools.path(of: "agy")
             claudePath = .some(await claude)
             codexPath = .some(await codex)
             geminiPath = .some(await gemini)
@@ -80,8 +80,8 @@ struct WelcomeSheet: View {
                     missing: "Not found. Install it with `npm install -g @anthropic-ai/claude-code`, or see claude.com/claude-code. Plain shell sessions work without it.")
             toolRow("Codex", command: "codex", path: codexPath,
                     missing: "Not found. Optional: `npm install -g @openai/codex` to run Codex sessions too.")
-            toolRow("Gemini CLI", command: "gemini", path: geminiPath,
-                    missing: "Not found. Optional: `npm install -g @google/gemini-cli` to run Gemini sessions too.")
+            toolRow("Gemini / Antigravity CLI", command: "agy", path: geminiPath,
+                    missing: "Not found. Install Antigravity CLI from antigravity.google to run Gemini sessions.")
         }
     }
 

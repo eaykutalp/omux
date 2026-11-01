@@ -31,8 +31,8 @@ struct Sidebar: View {
             // Traffic lights occupy the top-left; actions sit on the right.
             HStack(spacing: 14) {
                 Spacer()
-                Button { store.newTab() } label: { Image(systemName: "plus") }
-                    .help("New session in current project (⌘T)")
+                Button { store.newTab() } label: { Image(systemName: "terminal") }
+                    .help("New terminal in current project (⌘T)")
                 Button { store.openFolderPanel() } label: { Image(systemName: "folder.badge.plus") }
                     .help("Open folder as a project (⌘O)")
                 Button { store.showRecentSessions = true } label: { Image(systemName: "clock.arrow.circlepath") }
@@ -58,13 +58,15 @@ struct Sidebar: View {
                     case .tab(let tab, let groupID):
                         TabRow(tab: tab)
                             .tag(tab.id)
-                            .padding(.leading, 10)
+                            .listRowInsets(EdgeInsets(top: 3, leading: 10, bottom: 3, trailing: 8))
                             .contextMenu { TabMenu(tab: tab, groupID: groupID) }
                     }
                 }
                 .onMove { from, to in store.moveRows(rows, from: from, to: to) }
             }
             .listStyle(.sidebar)
+            .environment(\.defaultMinListRowHeight, 28)
+            .tint(Color(red: 0.35, green: 0.48, blue: 0.64))
             .scrollContentBackground(.hidden)
 
             Rectangle().fill(.primary.opacity(0.08)).frame(height: 1)
@@ -77,12 +79,10 @@ struct Sidebar: View {
             Button("Open Folder as Project…") { store.openFolderPanel() }
             Button("Open Recent Conversation…") { store.showRecentSessions = true }
             Button("New Codex Session") { store.newTab(command: "codex") }
-            Button("New Gemini Session") { store.newTab(command: "gemini") }
+            Button("New Gemini Session") { store.newTab(command: "agy") }
             Divider()
-            Button("New Session") { store.newTab() }
-            Button("New Shell") { store.newTab(command: "") }
+            Button("New Terminal") { store.newTab() }
         }
-        .ignoresSafeArea(.container, edges: .top)
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             for provider in providers {
                 provider.loadDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { data, _ in
@@ -92,7 +92,6 @@ struct Sidebar: View {
             }
             return true
         }
-        .navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 420)
     }
 }
 
@@ -112,8 +111,23 @@ struct TabRow: View {
         return running > 0 ? "\(running) agent\(running == 1 ? "" : "s")" : nil
     }
 
+    private func statusText(_ runtime: TabRuntime) -> String? {
+        if runtime.exited { return "Stopped" }
+        if let state = runtime.statusState, state != .idle {
+            return runtime.statusLine(showFolder: false)
+        }
+        if runtime.needsAttention { return "Needs you" }
+        if runtime.busy { return "Running" }
+        return runtime.statusLine(showFolder: false)
+    }
+
     var body: some View {
         let rt = store.runtime[tab.id] ?? TabRuntime()
+        let provider = store.provider(of: tab)
+        let folder = rt.cwd ?? store.directory(of: tab)
+        let status = statusText(rt)
+        let subtitle = [status ?? (showFolderPath ? folder.map { ($0 as NSString).abbreviatingWithTildeInPath } : nil), agentCount]
+            .compactMap { $0 }.joined(separator: " · ").nilIfEmpty
         // Top-aligned so the dot stays beside the name when agent rows or buttons follow.
         HStack(alignment: .top, spacing: 8) {
             // The status dot turns into a close button on hover, as in Safari's tabs.
@@ -123,7 +137,7 @@ struct TabRow: View {
                         Image(systemName: "xmark")
                             .font(.system(size: 8, weight: .bold))
                             .foregroundStyle(.secondary)
-                            .frame(width: 14, height: 14)
+                            .frame(width: 20, height: 22)
                             .contentShape(Rectangle())
                     }
                     .help("Close session")
@@ -133,18 +147,26 @@ struct TabRow: View {
                         .frame(width: 8, height: 8)
                 }
             }
-            .frame(width: 8, height: 14)
-            .padding(.top, 2)
+            .frame(width: 20, height: 22)
+            .help(status ?? "Idle")
             VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 6) {
+                    ProviderIcon(provider: provider)
+                        .frame(width: 13, height: 13)
+                        .help(provider.label)
                 if store.renamingID == tab.id {
                     RenameField(initial: tab.name) { store.rename(tab.id, to: $0) }
                 } else {
-                    Text(tab.name).lineLimit(1)
+                    Text(tab.name)
+                        .lineLimit(1)
+                        .help(tab.name)
                 }
+                }
+                .frame(height: 22)
                 if let worktree = tab.worktree {
                     HStack(spacing: 3) {
                         Image(systemName: "arrow.triangle.branch").imageScale(.small)
-                        Text(([worktree.branch, rt.statusLine(showFolder: false), agentCount].compactMap { $0 })
+                        Text(([worktree.branch, status, agentCount].compactMap { $0 })
                             .joined(separator: " · "))
                         if let stat = diffStats.stats[tab.id], !stat.isEmpty {
                             Stat(added: stat.added, removed: stat.removed).layoutPriority(1)
@@ -156,11 +178,13 @@ struct TabRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                } else if let line = [rt.statusLine(showFolder: showFolderPath), agentCount].compactMap({ $0 }).joined(separator: " · ").nilIfEmpty {
+                    .help([worktree.branch, status, folder].compactMap { $0 }.joined(separator: "\n"))
+                } else if let line = subtitle {
                     Text(line)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                        .help([status, folder].compactMap { $0 }.joined(separator: "\n"))
                 }
                 if rt.awaitsPermission {
                     PermissionButtons(tabID: tab.id).padding(.top, 3)
@@ -179,10 +203,11 @@ struct TabRow: View {
                 }
             }
             Spacer(minLength: 4)
+            ZStack {
             if hovering {
-                if rt.busy {
+                if rt.busy || (store.provider(of: tab) == .codex && rt.agentConnected) {
                     Button { store.stop(tab.id) } label: { Image(systemName: "stop.fill") }
-                        .help("Interrupt (Ctrl-C)")
+                        .help(store.provider(of: tab) == .codex ? "Interrupt Codex" : "Interrupt (Ctrl-C)")
                 } else if !rt.agentConnected {
                     Button { store.start(tab.id) } label: { Image(systemName: "play.fill") }
                         .help("Start or continue this session")
@@ -192,10 +217,10 @@ struct TabRow: View {
             } else if rt.hasActivity {
                 Circle().fill(.blue).frame(width: 6, height: 6)
             }
+            }
+            .frame(width: 22, height: 22)
         }
         .buttonStyle(.plain)
-        .opacity(rt.exited && !hovering ? 0.55 : 1)
-        .padding(.vertical, 2)
         .onHover { over in
             hovering = over
             if over { store.refreshBusy(tab.id) }
@@ -206,40 +231,102 @@ struct TabRow: View {
 struct GroupHeader: View {
     @EnvironmentObject var store: Store
     let group: TabGroup
-    @State private var hovering = false
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 4) {
             if store.renamingID == group.id {
                 RenameField(initial: group.name) { store.rename(group.id, to: $0) }
             } else {
                 Text(group.name)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 12, weight: .semibold))
                     .lineLimit(1)
+                    .truncationMode(.tail)
+                    .layoutPriority(1)
+                    .help(group.name)
             }
-            Spacer()
-            // Show/hide chevron on hover, then the + at the trailing edge.
             Button { store.updateGroup(group.id) { $0.isCollapsed.toggle() } } label: {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 7, weight: .bold))
+                    .font(.system(size: 9, weight: .bold))
                     .rotationEffect(.degrees(group.isCollapsed ? 0 : 90))
-                    .frame(width: 10, height: 10)
+                    .frame(width: 14, height: 24)
             }
-            .opacity(hovering || group.isCollapsed ? 1 : 0)
             .help(group.isCollapsed ? "Show sessions" : "Hide sessions")
+            Spacer(minLength: 4)
+            GroupProviderButton(provider: .claude, group: group)
+            GroupProviderButton(provider: .gemini, group: group)
+            GroupProviderButton(provider: .codex, group: group)
             Button { store.newTab(in: group.id) } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 8, weight: .semibold))
-                    .frame(width: 10, height: 10)
+                Image(systemName: "terminal")
+                    .font(.system(size: 12, weight: .medium))
+                    .frame(width: 26, height: 26)
             }
-            .help("New session in \(group.name)")
+            .help("New terminal in \(group.name)")
+            Button { store.editingGroupID = group.id } label: {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 12, weight: .medium))
+                    .frame(width: 26, height: 26)
+            }
+            .help("Project settings")
         }
         .buttonStyle(.plain)
-        .foregroundStyle(.tertiary)
+        .foregroundStyle(.secondary)
         .padding(.top, 6)
         .contentShape(Rectangle())
-        .onHover { hovering = $0 }
         .contextMenu { GroupMenu(group: group) }
+    }
+}
+
+private struct GroupProviderButton: View {
+    @EnvironmentObject var store: Store
+    let provider: SessionProvider
+    let group: TabGroup
+
+    var body: some View {
+        Button { store.newTab(in: group.id, command: provider.command) } label: {
+            ProviderIcon(provider: provider)
+                .frame(width: 16, height: 16)
+                .frame(width: 26, height: 26)
+                .contentShape(Rectangle())
+        }
+        .help("New \(provider.label) session in \(group.name)")
+    }
+}
+
+struct ProviderIcon: View {
+    let provider: SessionProvider
+
+    private var resourceName: String? {
+        switch provider {
+        case .claude: return "claude"
+        case .codex: return "codex"
+        case .gemini: return "antigravity"
+        case .shell, .custom: return nil
+        }
+    }
+
+    var body: some View {
+        if let resourceName,
+           let url = Bundle.main.url(forResource: resourceName, withExtension: "svg"),
+           let image = NSImage(contentsOf: url) {
+            Image(nsImage: image)
+                .renderingMode(provider == .gemini ? .original : .template)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .foregroundStyle(providerColor)
+        } else {
+            Image(systemName: provider == .gemini ? "sparkles" : "terminal")
+                .imageScale(.small)
+                .foregroundStyle(providerColor)
+        }
+    }
+
+    private var providerColor: Color {
+        switch provider {
+        case .claude: return Color(red: 0.84, green: 0.47, blue: 0.34)
+        case .codex: return .primary
+        case .gemini: return .accentColor
+        case .shell, .custom: return .secondary
+        }
     }
 }
 
@@ -322,9 +409,8 @@ struct GroupMenu: View {
     let group: TabGroup
 
     var body: some View {
-        Button("New Session") { store.newTab(in: group.id) }
+        Button("New Terminal") { store.newTab(in: group.id) }
         Button("New Session in Worktree…") { store.newWorktreeGroupID = group.id }
-        Button("New Shell") { store.newTab(in: group.id, command: "") }
         Divider()
         Button("Rename") { store.renamingID = group.id }
         Button("Edit Project…") { store.editingGroupID = group.id }

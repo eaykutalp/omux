@@ -26,9 +26,18 @@ final class SessionProviderTests: XCTestCase {
     }
 
     func testShellOverrideDoesNotInheritProjectAgent() {
-        let group = TabGroup(name: "Project")
+        var group = TabGroup(name: "Project")
+        group.command = "agy"
+        group.provider = .gemini
         let tab = TabItem(name: "Shell", command: "")
         XCTAssertEqual(tab.resolvedProvider(in: group), .shell)
+    }
+
+    func testNewProjectStartsWithPlainTerminal() throws {
+        let group = TabGroup(name: "Project", tabs: [TabItem(name: "Session 1")])
+        let restored = try JSONDecoder().decode(TabGroup.self, from: JSONEncoder().encode(group))
+        XCTAssertEqual(restored.command, "")
+        XCTAssertEqual(restored.tabs[0].resolvedProvider(in: restored), .shell)
     }
 
     func testCodexIdentitySurvivesRoundTrip() throws {
@@ -52,7 +61,21 @@ final class SessionProviderTests: XCTestCase {
     func testGeminiCommandsAreRecognized() {
         XCTAssertEqual(SessionProvider.infer(command: "gemini"), .gemini)
         XCTAssertEqual(SessionProvider.infer(command: "gemini --model gemini-2.5-pro"), .gemini)
-        XCTAssertEqual(SessionProvider.gemini.command, "gemini")
+        XCTAssertEqual(SessionProvider.infer(command: "agy"), .gemini)
+        XCTAssertEqual(SessionProvider.gemini.command, "agy")
+    }
+
+    func testAgentCommandsAreStableWhenProjectDefaultsChange() throws {
+        var group = TabGroup(name: "Project")
+        group.provider = .gemini
+        group.command = "agy"
+        var tab = TabItem(name: "Existing", command: "agy")
+        tab.provider = .gemini
+        group.tabs = [tab]
+        group.provider = .codex
+        group.command = "codex"
+        XCTAssertEqual(group.tabs[0].resolvedProvider(in: group), .gemini)
+        XCTAssertEqual(group.tabs[0].command, "agy")
     }
 
     func testClaudeStartsANewPinnedConversationInsteadOfContinuingAnotherTab() {

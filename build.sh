@@ -39,6 +39,13 @@ cp Info.plist "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" -c "Set :CFBundleName $NAME" \
   -c "Set :NSServices:0:NSMenuItem:default Open in $NAME" -c "Set :NSServices:0:NSPortName $NAME" "$APP/Contents/Info.plist"
 cp Resources/omux.icns "$APP/Contents/Resources/"
+for icon in Resources/claude.svg Resources/codex.svg Resources/antigravity.svg; do
+  [ -e "$icon" ] && cp "$icon" "$APP/Contents/Resources/"
+done
+if [ -e Resources/antigravity-statusline.sh ]; then
+  cp Resources/antigravity-statusline.sh "$APP/Contents/Resources/"
+  chmod +x "$APP/Contents/Resources/antigravity-statusline.sh"
+fi
 for bundle in .build/release/*.bundle; do
   [ -e "$bundle" ] && cp -R "$bundle" "$APP/Contents/Resources/"
 done

@@ -42,6 +42,11 @@ struct TabItem: Identifiable, Codable, Hashable {
     var claudeSessionID = UUID()
     /// Assigned by Codex, never guessed from the working directory or latest chat.
     var codexThreadID: String?
+    /// Whether this tab has already launched Antigravity. Its `--continue` flag resumes
+    /// the most recent conversation for the workspace after the first launch.
+    var antigravityStarted = false
+    /// The exact Antigravity conversation assigned to this tab, once its statusline reports it.
+    var antigravityConversationID: String?
     /// Set when the session runs in its own git worktree; `directory` is the worktree.
     var worktree: Worktree?
     /// The name follows the title Claude Code gives the conversation until the session is renamed.
@@ -67,6 +72,8 @@ struct TabItem: Identifiable, Codable, Hashable {
         color = (try? c.decodeIfPresent(TabColor.self, forKey: .color)) ?? .none
         claudeSessionID = try c.decodeIfPresent(UUID.self, forKey: .claudeSessionID) ?? UUID()
         codexThreadID = try c.decodeIfPresent(String.self, forKey: .codexThreadID)
+        antigravityStarted = try c.decodeIfPresent(Bool.self, forKey: .antigravityStarted) ?? false
+        antigravityConversationID = try c.decodeIfPresent(String.self, forKey: .antigravityConversationID)
         worktree = try c.decodeIfPresent(Worktree.self, forKey: .worktree)
         autoName = try c.decodeIfPresent(Bool.self, forKey: .autoName) ?? Self.isDefaultName(name)
     }
@@ -106,8 +113,8 @@ struct TabGroup: Identifiable, Codable, Hashable {
     var id = UUID()
     var name: String
     var directory: String?
-    var command: String? = "claude"
-    var provider: SessionProvider = .claude
+    var command: String? = ""
+    var provider: SessionProvider = .shell
     var isCollapsed = false
     /// New sessions get their own git worktree.
     var useWorktrees = false

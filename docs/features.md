@@ -2,10 +2,10 @@
 
 Everything omux does, in detail. The [README](../README.md) has the short version.
 
-- **Projects and sessions.** A project is a folder plus a default command; sessions live under it in the sidebar. Drag to reorder or move sessions between projects, rename them, and give them colors.
+- **Projects and sessions.** A project groups sessions under a folder in the sidebar. The terminal button and ⌘T open a plain shell; the Claude, Gemini and Codex buttons start their respective agents. Existing sessions keep their own command and provider. Drag to reorder or move sessions between projects, rename them, and give them colors.
 - **Agent selection.** Choose Claude Code, Codex, Gemini CLI, a plain shell, or a custom command in project/session settings. File › New Claude Code Session, New Codex Session, and New Gemini Session start those agents directly. Worktree sessions also have an agent selector.
 - **Conversations that resume.** Claude sessions keep their pinned UUID; Codex sessions keep the thread ID assigned by Codex. Restart and Continue reopen that exact conversation.
-- **Gemini sessions.** Gemini CLI runs in its own terminal session and manages saved conversations itself. Use Gemini's `--resume` option or `/resume` inside Gemini to continue a previous conversation.
+- **Gemini sessions.** Gemini/Antigravity CLI runs in its own terminal session and manages saved conversations itself. Personal accounts use Google's `agy` command; after the first launch omux uses `agy -c` to continue the latest conversation for that workspace. Use `/resume` inside Antigravity when choosing a specific older conversation.
 - **Live status.** Each session shows whether its agent is working, needs you or is done, and the Dock badge counts sessions waiting on you.
 - **Notifications.** When a session you aren't looking at needs you, omux posts a macOS notification with a sound; clicking it opens the session. Notifications for finished sessions are optional, and Settings can make it sound only, with the macOS sound of your choice. Programs can send their own with OSC 9 or OSC 777: set Claude Code's notification channel to `ghostty` (in `/config`) to get its notifications, and its plugins', this way. Turn each kind on or off in Settings › Notifications.
 - **Allow or deny from the sidebar.** Claude tool permissions and Codex command/file-change approvals can be answered in the sidebar or header. Codex's info button shows the requested command or reason. Other Codex permission forms and questions are answered in its terminal.

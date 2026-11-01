@@ -1,22 +1,21 @@
 import SwiftUI
 
-/// One compact line of Claude limits: `5h 1%  Week 32%  Fable 35%`, each with a
-/// hairline bar. Hovering a limit swaps its text for the reset time.
+/// Limits stay within the sidebar; reset details appear in tooltips without resizing it.
 struct UsageView: View {
     @EnvironmentObject var store: Store
     @StateObject private var monitor = UsageMonitor()
+    @StateObject private var antigravity = AntigravityUsage()
     @ObservedObject private var codex = CodexManager.shared
-    @State private var hovered: String?
     @AppStorage(Prefs.usageInterval) private var usageInterval = 300.0
 
     /// Codex sessions show Codex's limits. Gemini CLI does not expose a supported
     /// usage endpoint here, so it doesn't show Claude's limits by accident.
     private var isCodex: Bool { store.selectedProvider == .codex }
     private var isGemini: Bool { store.selectedProvider == .gemini }
-    private var limits: [UsageMonitor.Limit] { isCodex ? codex.limits : (isGemini ? [] : monitor.limits) }
+    private var limits: [UsageMonitor.Limit] { isCodex ? codex.limits : (isGemini ? antigravity.limits : monitor.limits) }
 
     var body: some View {
-        HStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             if isCodex {
                 Text(codex.plan.map { "Codex \($0.replacingOccurrences(of: "_", with: " ").capitalized)" } ?? "Codex")
                     .font(.caption2).foregroundStyle(.tertiary)
@@ -25,10 +24,14 @@ struct UsageView: View {
                 Text("Gemini CLI")
                     .font(.caption2).foregroundStyle(.tertiary)
             }
+            if !isCodex && !isGemini {
+                Text("Claude Code").font(.caption2).foregroundStyle(.secondary)
+            }
             if limits.isEmpty {
                 if isGemini {
-                    Text("Usage unavailable")
+                    Text("Waiting for Gemini usage data…")
                         .font(.caption2).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 } else {
                 Button {
                     if isCodex { Task { await codex.refreshUsage() } } else { monitor.refresh() }
@@ -36,36 +39,39 @@ struct UsageView: View {
                     Text(isCodex ? codex.usageError ?? "Codex usage…" : monitor.error ?? "Claude usage…")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+                        .lineLimit(2)
                 }
                 .buttonStyle(.plain)
                 .help(isCodex ? codex.usageError ?? "" : monitor.detail ?? "")
                 }
             }
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 8) {
             ForEach(limits) { limit in
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(hovered == limit.id ? limit.resetText : "\(limit.label) \(limit.percent)%")
+                    Text("\(limit.label) \(limit.percent)%")
                         .font(.caption2.monospacedDigit())
-                        .foregroundStyle(hovered == limit.id ? .primary : .secondary)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
-                        .fixedSize()
+                        .truncationMode(.tail)
                     GeometryReader { geo in
                         ZStack(alignment: .leading) {
                             Capsule().fill(.quaternary)
                             Capsule().fill(limit.tint)
-                                .frame(width: geo.size.width * CGFloat(min(limit.percent, 100)) / 100)
+                                .frame(width: max(0, geo.size.width) * CGFloat(max(0, min(limit.percent, 100))) / 100)
                         }
                     }
                     .frame(height: 3)
                 }
-                .onHover { hovered = $0 ? limit.id : nil }
-                .help(limit.resetText)
+                .help("\(limit.label): \(limit.percent)% used. \(limit.resetText)")
             }
-            Spacer(minLength: 0)
+            }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .onAppear { monitor.start() }
-        .onDisappear { monitor.stop() }
+        .onAppear { if isGemini { antigravity.start() } }
+        .onDisappear { monitor.stop(); antigravity.stop() }
         .onChange(of: usageInterval) { _, seconds in monitor.schedule(every: seconds) }
         .task(id: isCodex) {
             guard isCodex else { return }
@@ -73,6 +79,10 @@ struct UsageView: View {
                 await codex.refreshUsage()
                 try? await Task.sleep(for: .seconds(max(usageInterval, 30)))
             }
+        }
+        .task(id: isGemini) {
+            guard isGemini else { antigravity.stop(); return }
+            antigravity.start()
         }
     }
 }

@@ -26,8 +26,8 @@ extension Store {
             await MainActor.run {
                 guard result.ok else { completion(result.message); return }
                 var tab = TabItem(name: name, directory: path, worktree: Worktree(branch: branch, base: base, repo: repo))
-                tab.provider = provider
-                tab.command = provider?.command
+                tab.provider = provider ?? .shell
+                tab.command = (provider ?? .shell).command
                 let setup = self.groups.first { $0.id == groupID }?.worktreeSetup
                 self.addSession(tab, to: groupID, setup: setup)
                 completion(nil)
@@ -226,7 +226,7 @@ struct WorktreeSheet: View {
                 Form {
                     TextField("Name", text: $name)
                     Picker("Agent", selection: $provider) {
-                        Text("Project default").tag(Optional<SessionProvider>.none)
+                        Text("Plain terminal").tag(Optional<SessionProvider>.none)
                         Text("Claude Code").tag(Optional(SessionProvider.claude))
                         Text("Codex").tag(Optional(SessionProvider.codex))
                         Text("Gemini CLI").tag(Optional(SessionProvider.gemini))

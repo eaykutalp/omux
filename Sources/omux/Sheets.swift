@@ -79,13 +79,13 @@ struct TabEditSheet: View {
     let tabID: UUID
 
     private enum CommandMode: String, CaseIterable, Identifiable {
-        case inherit = "Project default", claude = "Claude Code", codex = "Codex", gemini = "Gemini CLI", shell = "Plain shell", custom = "Custom"
+        case claude = "Claude Code", codex = "Codex", gemini = "Gemini CLI", shell = "Plain shell", custom = "Custom"
         var id: String { rawValue }
     }
 
     @State private var name = ""
     @State private var directory = ""
-    @State private var mode: CommandMode = .inherit
+    @State private var mode: CommandMode = .shell
     @State private var customCommand = ""
     @State private var sessionID = UUID()
     @State private var codexThreadID: String?
@@ -94,7 +94,6 @@ struct TabEditSheet: View {
 
     private var provider: SessionProvider {
         switch mode {
-        case .inherit: return store.group(containing: tabID)?.provider ?? .shell
         case .claude: return .claude
         case .codex: return .codex
         case .gemini: return .gemini
@@ -119,9 +118,6 @@ struct TabEditSheet: View {
             }
             if mode == .custom {
                 TextField("Command", text: $customCommand, prompt: Text("claude"))
-            } else if mode == .inherit {
-                Text(group?.command?.isEmpty == false ? group!.command! : "plain shell")
-                    .font(.caption).foregroundStyle(.secondary)
             }
             if provider == .claude || provider == .codex {
                 LabeledContent(provider == .codex ? "Codex conversation" : "Claude conversation") {
@@ -161,10 +157,10 @@ struct TabEditSheet: View {
             case .custom: mode = .custom; customCommand = tab.command ?? ""
             case nil:
                 switch tab.command {
-                case nil: mode = .inherit
+                case nil: mode = .custom; customCommand = store.group(containing: tabID)?.command ?? ""
                 case "": mode = .shell
                 case "codex": mode = .codex
-                case "gemini": mode = .gemini
+                case "gemini", "agy": mode = .gemini
                 case "claude": mode = .claude
                 case let cmd?: mode = .custom; customCommand = cmd
                 }
@@ -180,10 +176,9 @@ struct TabEditSheet: View {
             if !trimmed.isEmpty, trimmed != tab.name { tab.name = trimmed; tab.autoName = false }
             tab.directory = directory.isEmpty ? nil : directory
             switch mode {
-            case .inherit: tab.command = nil; tab.provider = nil
             case .claude: tab.command = "claude"; tab.provider = .claude
             case .codex: tab.command = "codex"; tab.provider = .codex
-            case .gemini: tab.command = "gemini"; tab.provider = .gemini
+            case .gemini: tab.command = "agy"; tab.provider = .gemini
             case .shell: tab.command = ""; tab.provider = .shell
             case .custom: tab.command = customCommand; tab.provider = SessionProvider.infer(command: customCommand)
             }
@@ -202,29 +197,17 @@ struct GroupEditSheet: View {
 
     @State private var name = ""
     @State private var directory = ""
-    @State private var command = ""
-    @State private var provider = SessionProvider.claude
     @State private var useWorktrees = false
     @State private var worktreeSetup = ""
 
     var body: some View {
         Form {
-            TextField("Name", text: $name)
+            Text("Project settings").font(.headline)
+            TextField("Project name", text: $name)
             HStack {
                 TextField("Folder", text: $directory, prompt: Text("~"))
                 Button("Choose…") { if let dir = chooseDirectory(current: directory) { directory = dir } }
             }
-            if !provider.startsAutomatically(in: directory.isEmpty ? "~" : directory) {
-                HomeFolderHint(provider: provider)
-            }
-            Picker("New sessions", selection: $provider) {
-                ForEach(SessionProvider.allCases) { Text($0.label).tag($0) }
-            }
-            if provider == .custom {
-                TextField("Command", text: $command)
-            }
-            Text("Applies when a session starts. Existing sessions keep running.")
-                .font(.caption).foregroundStyle(.secondary)
             Toggle("Give new sessions their own Git worktree", isOn: $useWorktrees)
             TextField("Worktree setup", text: $worktreeSetup, prompt: Text("cp \"$OMUX_REPO/.env\" . && npm install"))
                 .font(.system(.body, design: .monospaced))
@@ -243,8 +226,6 @@ struct GroupEditSheet: View {
             guard let group = store.groups.first(where: { $0.id == groupID }) else { return }
             name = group.name
             directory = group.directory ?? ""
-            command = group.command ?? ""
-            provider = command == group.provider.command ? group.provider : .custom
             useWorktrees = group.useWorktrees
             worktreeSetup = group.worktreeSetup
         }
@@ -254,8 +235,6 @@ struct GroupEditSheet: View {
         store.updateGroup(groupID) { group in
             group.name = name.trimmingCharacters(in: .whitespaces).isEmpty ? group.name : name
             group.directory = directory.isEmpty ? nil : directory
-            group.command = provider == .custom ? command : provider.command
-            group.provider = provider == .custom ? SessionProvider.infer(command: command) : provider
             group.useWorktrees = useWorktrees
             group.worktreeSetup = worktreeSetup.trimmingCharacters(in: .whitespacesAndNewlines)
         }
@@ -294,7 +273,7 @@ struct RecentSessionsSheet: View {
             switch store.provider(of: entry.tab) {
             case .claude: return "claude:" + entry.tab.claudeSessionID.uuidString.lowercased()
             case .codex: return entry.tab.codexThreadID.map { "codex:" + $0 }
-            case .shell, .custom: return nil
+            case .gemini, .shell, .custom: return nil
             }
         })
     }
@@ -319,7 +298,6 @@ struct RecentSessionsSheet: View {
             Picker("Agent", selection: $provider) {
                 Text("Claude Code").tag(SessionProvider.claude)
                 Text("Codex").tag(SessionProvider.codex)
-                Text("Gemini CLI").tag(SessionProvider.gemini)
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, 12)

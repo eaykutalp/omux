@@ -15,7 +15,7 @@ struct OmuxApp: App {
                 .frame(minWidth: 720, minHeight: 420)
         }
         .defaultSize(width: 1240, height: 780)
-        .windowStyle(.hiddenTitleBar)
+        .windowStyle(.titleBar)
         .commands { AppCommands(store: store) }
 
         Settings { SettingsView() }
@@ -25,6 +25,7 @@ struct OmuxApp: App {
 enum Prefs {
     static let confirmQuit = "confirmQuit"
     static let showFolderPath = "showFolderPath"
+    static let sidebarWidth = "sidebarWidth"
     static let usageInterval = "usageInterval"
     static let theme = "theme"
     static let autoResume = "autoResume"
@@ -44,7 +45,7 @@ enum Prefs {
     static let notifySound = "notifySound"
     static let welcomed = "welcomed"
 
-    static let all = [confirmQuit, showFolderPath, usageInterval, theme, autoResume, showFiles, filesByDate,
+    static let all = [confirmQuit, showFolderPath, sidebarWidth, usageInterval, theme, autoResume, showFiles, filesByDate,
                       filesBrowserCollapsed, previewWrapLines, panelTab, fontFamily, fontSize,
                       notifyNeedsYou, notifyDone, notifyPrograms]
 
@@ -134,68 +135,25 @@ struct SettingsView: View {
     }
 }
 
-/// Keeps the close, minimize and zoom buttons visible while the toolbar is hidden. Hiding the
-/// window toolbar removes them on some macOS versions; keeping the toolbar instead leaves an
-/// invisible strip that pushes the content down and swallows clicks on the sidebar's buttons.
-/// Closing this (the main) window quits omux, so its sessions don't keep running in the background.
+/// Observes closing without mutating AppKit's title bar or standard window buttons.
 private struct WindowChrome: NSViewRepresentable {
     func makeNSView(context: Context) -> ChromeView { ChromeView() }
-
-    func updateNSView(_ view: ChromeView, context: Context) {
-        DispatchQueue.main.async { ChromeView.configure(view.window) }
-    }
+    func updateNSView(_ view: ChromeView, context: Context) {}
 
     final class ChromeView: NSView {
-        private var observers: [NSObjectProtocol] = []
-
+        private var observer: NSObjectProtocol?
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            observers.forEach(NotificationCenter.default.removeObserver)
-            observers = []
+            if let observer { NotificationCenter.default.removeObserver(observer) }
+            observer = nil
             guard let window else { return }
-            DispatchQueue.main.async { Self.configure(window) }
-            // SwiftUI hides the buttons again whenever it updates the window, which happens at no
-            // fixed moment (switching sessions, opening panels, resizing). didUpdate comes after every
-            // event the window handles, and configure only writes what has changed, so it stays cheap.
-            let refresh: [Notification.Name] = [NSWindow.didUpdateNotification, NSWindow.didBecomeKeyNotification,
-                                                NSWindow.didResizeNotification, NSWindow.didExitFullScreenNotification]
-            for name in refresh {
-                observers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak window] _ in
-                    MainActor.assumeIsolated { Self.configure(window) }
-                })
-            }
-            observers.append(NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { _ in
+            observer = NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification, object: window, queue: .main
+            ) { _ in
                 MainActor.assumeIsolated { AppDelegate.mainWindowWillClose() }
-            })
-        }
-
-        deinit { observers.forEach(NotificationCenter.default.removeObserver) }
-
-        static func configure(_ window: NSWindow?) {
-            guard let window else { return }
-            let style: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
-            if !window.styleMask.isSuperset(of: style) { window.styleMask.formUnion(style) }
-            if !window.titlebarAppearsTransparent { window.titlebarAppearsTransparent = true }
-            if window.titleVisibility != .hidden { window.titleVisibility = .hidden }
-            // In full screen macOS slides the title bar in and out itself; forcing it visible there
-            // would pin it over the sessions.
-            let fullScreen = window.styleMask.contains(.fullScreen)
-            let frameView = window.contentView?.superview
-            for type in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
-                guard let button = window.standardWindowButton(type) else { continue }
-                if button.isHidden { button.isHidden = false }
-                if button.alphaValue < 1 { button.alphaValue = 1 }
-                guard !fullScreen else { continue }
-                // Hiding the window toolbar can hide the title bar view that holds the buttons, so
-                // showing the buttons alone isn't enough. Walk up to the window's frame view.
-                var parent = button.superview
-                while let view = parent, view !== frameView {
-                    if view.isHidden { view.isHidden = false }
-                    if view.alphaValue < 1 { view.alphaValue = 1 }
-                    parent = view.superview
-                }
             }
         }
+        deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }
     }
 }
 
@@ -224,10 +182,9 @@ struct ContentView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
+        SidebarSplitView {
             Sidebar(theme: theme)
-                .toolbar(removing: .sidebarToggle)
-        } detail: {
+        } content: {
             HSplitView {
                 VStack(spacing: 0) {
                     SessionHeader(theme: theme, showFiles: $showFiles)
@@ -244,17 +201,12 @@ struct ContentView: View {
                     }
                 }
                 .frame(minWidth: 360)
-                .ignoresSafeArea(.container, edges: .top)
                 if showFiles {
                     RightPanel(root: projectRoot, theme: theme)
                         .frame(minWidth: 260, idealWidth: 380, maxWidth: 900)
-                        .ignoresSafeArea(.container, edges: .top)
                 }
             }
-            // Each pane ignores the title bar inset itself, so the session header and the panel's
-            // tabs sit level with the sidebar's buttons. On the split view alone it doesn't reach them.
         }
-        .toolbar(.hidden, for: .windowToolbar)
         .background(WindowChrome())
         .preferredColorScheme(theme.colorScheme)
         .background(Color(nsColor: theme.chrome))
@@ -348,10 +300,10 @@ struct AppCommands: Commands {
     var body: some Commands {
         CommandGroup(after: .appInfo) { CheckForUpdatesButton() }
         CommandGroup(replacing: .newItem) {
-            Button("New Session") { store.newTab() }.keyboardShortcut("t")
+            Button("New Terminal") { store.newTab() }.keyboardShortcut("t")
             Button("New Codex Session") { store.newTab(command: "codex") }
             Button("New Claude Code Session") { store.newTab(command: "claude") }
-            Button("New Gemini Session") { store.newTab(command: "gemini") }
+            Button("New Gemini Session") { store.newTab(command: "agy") }
             Button("New Shell") { store.newTab(command: "") }.keyboardShortcut("t", modifiers: [.command, .shift])
             Button("New Session in Worktree…") {
                 if let id = store.selectedGroup?.id ?? store.groups.first?.id { store.newWorktreeGroupID = id }
