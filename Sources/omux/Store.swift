@@ -366,9 +366,20 @@ final class Store: ObservableObject {
     /// asks for a second Ctrl-C to exit. The shell itself stays at its prompt.
     func stop(_ id: UUID) {
         if runtime[id]?.provider == .codex {
-            // The remote TUI is the foreground process, while its App Server is a
-            // separate child owned by omux. Stopping this Codex session closes both.
-            kill(id)
+            guard terminals[id] != nil, !(runtime[id]?.exited ?? true) else { return }
+            Task {
+                do {
+                    try await CodexManager.shared.interrupt(id)
+                    // Once the server confirms interruption, exit its remote TUI
+                    // before closing the endpoint so it cannot sit in reconnect loop.
+                    if let view = self.terminals[id] { view.send(txt: "\u{03}") }
+                    try await Task.sleep(for: .milliseconds(400))
+                    self.closeCodex(id)
+                    self.update(id) { $0.busy = false; $0.agentConnected = false; $0.statusState = nil }
+                } catch {
+                    Self.showError("Couldn't stop Codex", error.localizedDescription)
+                }
+            }
             return
         }
         guard let view = terminals[id], !(runtime[id]?.exited ?? true) else { return }
@@ -481,18 +492,21 @@ final class Store: ObservableObject {
     func start(_ id: UUID) {
         guard let loc = location(of: id), pendingCommands[id] == nil else { return }
         let tab = groups[loc.group].tabs[loc.tab]
+        // The Codex App Server token is injected into the shell when its terminal is
+        // created. After Stop closes that server, Play must create a fresh shell too;
+        // reusing the old shell would send the stale token and get HTTP 401.
+        if tab.resolvedProvider(in: groups[loc.group]) == .codex,
+           !CodexManager.shared.isConnected(id) {
+            restart(id)
+            return
+        }
         if let view = terminals[id], !(runtime[id]?.exited ?? true) {
-            if runtime[id]?.provider == .codex, runtime[id]?.statusState == .error,
-               !CodexManager.shared.isConnected(id) {
-                restart(id)
-                return
-            }
-            guard !Self.hasChildProcess(of: view.process.shellPid), codexStarts[id] == nil else { return }
+            guard !Self.hasChildProcess(of: view.process.shellPid) else { return }
+            guard codexStarts[id] == nil else { return }
             if runtime[id]?.provider != tab.resolvedProvider(in: groups[loc.group]) { restart(id); return }
         }
         if tab.resolvedProvider(in: groups[loc.group]) != .claude {
             if let view = terminals[id], !(runtime[id]?.exited ?? true) {
-                // A live Codex TUI is not an idle shell, even when its agent is idle.
                 if provider(of: tab) == .codex {
                     startCodex(view, tab: tab, cwd: runtime[id]?.cwd ?? directory(of: tab) ?? NSHomeDirectory())
                 } else if let command = startupCommand(tab: tab, group: groups[loc.group]), !command.isEmpty {
@@ -526,6 +540,10 @@ final class Store: ObservableObject {
             let command = raw == "gemini" ? "agy" : raw
             if let id = tab.antigravityConversationID, command == "agy" { return "agy --conversation \(id)" }
             return tab.antigravityStarted && command == "agy" ? "agy -c" : command
+        }
+        if tab.resolvedProvider(in: group) == .codex, raw == "codex",
+           let threadID = tab.codexThreadID {
+            return "codex resume \(Git.quote(threadID))"
         }
         guard tab.resolvedProvider(in: group) == .claude else { return raw }
         let session = tab.claudeSessionID.uuidString.lowercased()

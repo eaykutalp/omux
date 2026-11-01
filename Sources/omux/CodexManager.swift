@@ -93,7 +93,7 @@ final class CodexManager: ObservableObject {
         try Task.checkCancellation()
         let response: [String: Any]
         if let threadID {
-            response = try await connection.request("thread/resume", params: ["threadId": threadID, "excludeTurns": true])
+            response = try await connection.request("thread/resume", params: ["threadId": threadID, "excludeTurns": false])
         } else {
             response = try await connection.request("thread/start", params: ["cwd": cwd])
         }
@@ -106,6 +106,13 @@ final class CodexManager: ObservableObject {
         }
         try Task.checkCancellation()
         register(tabID: tabID, threadID: id)
+        // Seed the active turn from the resumed thread as well as live notifications;
+        // without this, Stop has no turn ID when the turn began before Omux attached.
+        if let history = thread["turns"] as? [[String: Any]],
+           let active = history.last(where: { $0["status"] as? String == "inProgress" }),
+           let turnID = active["id"] as? String {
+            turns[id] = turnID
+        }
         if let raw = thread["status"] as? [String: Any], let decoded = CodexStatus.decode(raw) {
             publish(id, decoded)
         }
@@ -139,7 +146,24 @@ final class CodexManager: ObservableObject {
         guard let root = threads[tabID] else { return }
         let threadIDs = (agents[tabID] ?? []).map(\.id) + [root]
         for thread in threadIDs {
-            guard let turn = turns[thread] else { continue }
+            var turn = turns[thread]
+            // A remote TUI may have started its turn before our notification arrived.
+            // Read the dedicated paginated turn API so Stop can target that exact turn;
+            // paginated threads do not reliably include turns in thread/resume.
+            if turn == nil {
+                let response = try await connection(for: tabID).request("thread/turns/list", params: [
+                    "threadId": thread, "limit": 10, "sortDirection": "desc", "itemsView": "notLoaded"
+                ])
+                if let history = response["data"] as? [[String: Any]],
+                   let active = history.first(where: { $0["status"] as? String == "inProgress" }),
+                   let id = active["id"] as? String {
+                    turns[thread] = id
+                    turn = id
+                }
+            }
+            guard let turn else {
+                throw CodexError.server("Couldn't confirm Codex stopped: its active turn ID is unavailable. Keep the server open and use `codex --remote … agents`, select this task, and press x.")
+            }
             _ = try await connection(for: tabID).request("turn/interrupt", params: ["threadId": thread, "turnId": turn])
             // The response acknowledges cancellation; turn/completed confirms it.
             for _ in 0..<100 {
